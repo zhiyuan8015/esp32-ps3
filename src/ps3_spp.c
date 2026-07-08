@@ -139,7 +139,12 @@ static void ps3_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param
 {
     if (event == ESP_SPP_INIT_EVT) {
         ESP_LOGI(PS3_TAG, "ESP_SPP_INIT_EVT");
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 3, 0)        
         esp_bt_dev_set_device_name(PS3_DEVICE_NAME);
+#else
+        esp_bt_gap_set_device_name(PS3_DEVICE_NAME);
+#endif
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);

@@ -23,6 +23,7 @@
 /********************************************************************************/
 /*              L O C A L    F U N C T I O N     P R O T O T Y P E S            */
 /********************************************************************************/
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 
 static void ps3_l2cap_init_service( char *name, uint16_t psm, uint8_t security_id);
 static void ps3_l2cap_deinit_service( char *name, uint16_t psm );
@@ -35,10 +36,12 @@ static void ps3_l2cap_disconnect_cfm_cback (uint16_t l2cap_cid, uint16_t result)
 static void ps3_l2cap_data_ind_cback (uint16_t l2cap_cid, BT_HDR *p_msg);
 static void ps3_l2cap_congest_cback (uint16_t cid, bool congested);
 
+#endif
 
 /********************************************************************************/
 /*                         L O C A L    V A R I A B L E S                       */
 /********************************************************************************/
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0) 
 
 static const tL2CAP_APPL_INFO dyn_info = {
     ps3_l2cap_connect_ind_cback,
@@ -55,6 +58,8 @@ static const tL2CAP_APPL_INFO dyn_info = {
 } ;
 
 static tL2CAP_CFG_INFO ps3_cfg_info;
+
+#endif
 
 bool is_connected = false;
 
@@ -148,6 +153,8 @@ void ps3_l2cap_send_hid( hid_cmd_t *hid_cmd, uint8_t len )
 *******************************************************************************/
 static void ps3_l2cap_init_service( char *name, uint16_t psm, uint8_t security_id)
 {
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0) 
     /* Register the PSM for incoming connections */
     if (!L2CA_Register(psm, (tL2CAP_APPL_INFO *) &dyn_info)) {
         ESP_LOGE(PS3_TAG, "%s Registering service %s failed", __func__, name);
@@ -160,8 +167,23 @@ static void ps3_l2cap_init_service( char *name, uint16_t psm, uint8_t security_i
         return;
     }
 
+#else
+    if ((ret = esp_bt_l2cap_register_callback(esp_bt_l2cap_cb)) != ESP_OK) {
+        ESP_LOGE(L2CAP_TAG, "%s l2cap register failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if ((ret = esp_bt_l2cap_init()) != ESP_OK) {
+        ESP_LOGE(L2CAP_TAG, "%s l2cap init failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+#endif  
+
     ESP_LOGI(PS3_TAG, "[%s] Service %s Initialized", __func__, name);
 }
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0) 
 
 /*******************************************************************************
 **
@@ -330,3 +352,27 @@ static void ps3_l2cap_congest_cback (uint16_t l2cap_cid, bool congested)
 {
     ESP_LOGI(PS3_TAG, "[%s] l2cap_cid: 0x%02x\n  congested: %d", __func__, l2cap_cid, congested );
 }
+
+#else
+
+static void esp_bt_l2cap_cb(esp_bt_l2cap_cb_event_t event, esp_bt_l2cap_cb_param_t *param)
+{
+    switch (event) {
+        case ESP_BT_L2CAP_INIT_EVT:
+        case ESP_BT_L2CAP_UNINIT_EVT:
+        case ESP_BT_L2CAP_OPEN_EVT:
+        case ESP_BT_L2CAP_CLOSE_EVT:
+        case ESP_BT_L2CAP_CL_INIT_EVT:
+        case ESP_BT_L2CAP_START_EVT:
+        case ESP_BT_L2CAP_SRV_STOP_EVT:
+        case ESP_BT_L2CAP_VFS_REGISTER_EVT: {
+            bt_app_work_dispatch(esp_hdl_bt_l2cap_cb_evt, event, param, sizeof(esp_bt_l2cap_cb_param_t), NULL);
+            break;
+        }
+        default:
+            ESP_LOGE(L2CAP_TAG, "Invalid L2CAP event: %d", event);
+            break;
+    }
+}
+
+#endif
