@@ -168,11 +168,13 @@ static void ps3_l2cap_init_service( char *name, uint16_t psm, uint8_t security_i
     }
 
 #else
+    /*注册L2CAP事件回调(Register L2CAP event callback)*/
     if ((ret = esp_bt_l2cap_register_callback(esp_bt_l2cap_cb)) != ESP_OK) {
         ESP_LOGE(L2CAP_TAG, "%s l2cap register failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
+    /*初始化L2CAP(Initialize L2CAP)*/
     if ((ret = esp_bt_l2cap_init()) != ESP_OK) {
         ESP_LOGE(L2CAP_TAG, "%s l2cap init failed: %s", __func__, esp_err_to_name(ret));
         return;
@@ -355,24 +357,90 @@ static void ps3_l2cap_congest_cback (uint16_t l2cap_cid, bool congested)
 
 #else
 
-static void esp_bt_l2cap_cb(esp_bt_l2cap_cb_event_t event, esp_bt_l2cap_cb_param_t *param)
-{
+/*******************************************************************************
+**
+** Function         esp_bt_l2cap_cb
+**
+** Description      After IDF 5.0, all API calls related to L2CAP trigger 
+**                  corresponding events upon completion. This function 
+**                  serves as the unified entry point for event handling.
+**                  (在IDF5.0后，所有L2CAP相关API执行调用完成均触发相应事件，此函数为统一的事件处理入口)
+**
+** Returns          void
+**
+*******************************************************************************/
+static void esp_bt_l2cap_cb(esp_bt_l2cap_cb_event_t event, esp_bt_l2cap_cb_param_t *param){
+    char bda_str[18] = {0};
+
     switch (event) {
-        case ESP_BT_L2CAP_INIT_EVT:
-        case ESP_BT_L2CAP_UNINIT_EVT:
-        case ESP_BT_L2CAP_OPEN_EVT:
-        case ESP_BT_L2CAP_CLOSE_EVT:
-        case ESP_BT_L2CAP_CL_INIT_EVT:
-        case ESP_BT_L2CAP_START_EVT:
-        case ESP_BT_L2CAP_SRV_STOP_EVT:
-        case ESP_BT_L2CAP_VFS_REGISTER_EVT: {
-            bt_app_work_dispatch(esp_hdl_bt_l2cap_cb_evt, event, param, sizeof(esp_bt_l2cap_cb_param_t), NULL);
+        case ESP_BT_L2CAP_INIT_EVT:{  /*Due to esp_bt_l2cap_init Trigger*/
+            if (param->init.status == ESP_BT_L2CAP_SUCCESS) {
+                ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_INIT_EVT: status:%d", param->init.status);
+                /* register VFS(虚拟文件系统). Only supports write, read and close.*/
+                esp_bt_l2cap_vfs_register();
+            } else {
+                ESP_LOGE(L2CAP_TAG, "ESP_BT_L2CAP_INIT_EVT: status:%d", param->init.status);
+            }
             break;
         }
+
+        case ESP_BT_L2CAP_UNINIT_EVT:{
+            ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_UNINIT_EVT: status:%d", param->uninit.status);
+            break;
+        }
+
+        case ESP_BT_L2CAP_OPEN_EVT:{  /*Due to... Trigger*/
+            if (param->open.status == ESP_BT_L2CAP_SUCCESS) {
+                ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_OPEN_EVT: status:%d, fd = %d, tx mtu = %"PRIu32", remote_address:%s", param->open.status,
+                        param->open.fd, param->open.tx_mtu, bda2str(param->open.rem_bda, bda_str, sizeof(bda_str)));
+                l2cap_wr_task_start_up(l2cap_read_handle, param->open.fd);
+            } else {
+                ESP_LOGE(L2CAP_TAG, "ESP_BT_L2CAP_OPEN_EVT: status:%d", param->open.status);
+            }
+            break;
+        }
+
+        case ESP_BT_L2CAP_CLOSE_EVT:{
+            ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_CLOSE_EVT: status:%d", param->close.status);
+            esp_bt_l2cap_start_srv(ESP_BT_L2CAP_SEC_AUTHENTICATE, BT_L2CAP_DYNMIC_PSM); // bug, need to do fix
+            break;
+        }
+
+        case ESP_BT_L2CAP_CL_INIT_EVT:{  /*Due to... Trigger*/
+            ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_CL_INIT_EVT: status:%d", param->cl_init.status);
+            break;
+        }
+
+        case ESP_BT_L2CAP_START_EVT:{  /*Due to... Trigger*/
+            if (param->start.status == ESP_BT_L2CAP_SUCCESS) {
+                ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_START_EVT: status:%d, hdl:0x%"PRIx32", sec_id:0x%x",
+                    param->start.status, param->start.handle, param->start.sec_id);
+            } else {
+                ESP_LOGE(L2CAP_TAG, "ESP_BT_L2CAP_START_EVT: status:%d", param->start.status);
+            }
+            break;
+        }
+
+        case ESP_BT_L2CAP_SRV_STOP_EVT:{
+            ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_SRV_STOP_EVT: status:%d, psm = 0x%x", param->srv_stop.status, param->srv_stop.psm);
+            break;
+        }
+
+        case ESP_BT_L2CAP_VFS_REGISTER_EVT:{  /*Due to esp_bt_l2cap_vfs_register Trigger*/
+            if (param->vfs_register.status == ESP_BT_L2CAP_SUCCESS) {
+                ESP_LOGI(L2CAP_TAG, "ESP_BT_L2CAP_VFS_REGISTER_EVT: status:%d", param->vfs_register.status);
+                /*Create an L2CAP server and start listening for connection requests.(创建L2CAP服务器并开始监听连接请求)*/
+                esp_bt_l2cap_start_srv(ESP_BT_L2CAP_SEC_AUTHENTICATE, BT_L2CAP_DYNMIC_PSM);
+            } else {
+                ESP_LOGE(L2CAP_TAG, "ESP_BT_L2CAP_VFS_REGISTER_EVT: status:%d", param->vfs_register.status);
+            }
+            break;
+        }
+
         default:
-            ESP_LOGE(L2CAP_TAG, "Invalid L2CAP event: %d", event);
             break;
     }
+    return;
 }
 
 #endif
